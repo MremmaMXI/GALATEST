@@ -594,39 +594,63 @@ function updateSelectorRow(width) {
   }
 }
 
-/* ======================== NUEVA FUNCIÓN SIMPLIFICADA: SOLO REEMPLAZA extractRoomsFromExternalSpreadsheet ======================== */
+/* ======================== EXTRAER HABITACIONES CON FILTRO CORRECTO ======================== */
 /**
  * extractRoomsFromExternalSpreadsheet(url)
- * VERSIÓN SIMPLIFICADA: Carga TODOS los números de habitación SIN filtros restrictivos
  * 
- * Estructura esperada:
+ * LÓGICA:
+ * - Calcula el próximo martes desde HOY
+ * - Incluye SOLO huéspedes que se van DESPUÉS de ese martes (miércoles en adelante)
+ * - Funciona para CUALQUIER día del año y CUALQUIER martes
+ * 
+ * Estructura esperada en hoja externa:
  * Fila 1 (encabezados): A=Hotel, B=Habitación, C=Apellido, D=Nombre, E=Salida
  * Datos: Fila 2 en adelante
- * - Columna B: Número de habitación
- * - Columna E: Debe tener valor (check de salida registrada)
  */
 function extractRoomsFromExternalSpreadsheet(url) {
   try {
-    Logger.log('extractRoomsFromExternalSpreadsheet: iniciando con URL');
+    Logger.log('extractRoomsFromExternalSpreadsheet: iniciando');
     
     if (!url || (''+url).trim() === '') {
       Logger.log('extractRoomsFromExternalSpreadsheet: URL vacía');
       return [];
     }
 
-    // Abrir spreadsheet externo
+    // 1) CALCULAR PRÓXIMO MARTES
+    const today = new Date();
+    const dayOfWeek = today.getDay(); // 0=domingo, 1=lunes, 2=martes, ... 6=sábado
+    
+    let daysUntilNextTuesday = 0;
+    if (dayOfWeek === 2) {
+      // Hoy es martes → próximo martes es en 7 días
+      daysUntilNextTuesday = 7;
+    } else if (dayOfWeek < 2) {
+      // Hoy es domingo (0) o lunes (1) → próximo martes está adelante en la semana
+      daysUntilNextTuesday = 2 - dayOfWeek;
+    } else {
+      // Hoy es miércoles+ → próximo martes es en la próxima semana
+      daysUntilNextTuesday = (2 + 7) - dayOfWeek;
+    }
+    
+    const nextTuesday = new Date(today);
+    nextTuesday.setDate(nextTuesday.getDate() + daysUntilNextTuesday);
+    nextTuesday.setHours(0, 0, 0, 0); // A las 00:00
+    
+    Logger.log('Hoy: ' + formatDateDDMMYYYY(today) + ' (día ' + dayOfWeek + ')');
+    Logger.log('Próximo martes: ' + formatDateDDMMYYYY(nextTuesday));
+
+    // 2) ABRIR HOJA EXTERNA
     let externalSs;
     try {
       externalSs = SpreadsheetApp.openByUrl(url);
     } catch (e) {
-      Logger.log('extractRoomsFromExternalSpreadsheet: no se pudo abrir la URL: ' + e);
+      Logger.log('extractRoomsFromExternalSpreadsheet: no se pudo abrir URL: ' + e);
       return [];
     }
 
-    // Obtener la primera hoja disponible
     const sheets = externalSs.getSheets();
     if (!sheets || sheets.length === 0) {
-      Logger.log('extractRoomsFromExternalSpreadsheet: no hay hojas en el spreadsheet');
+      Logger.log('extractRoomsFromExternalSpreadsheet: sin hojas');
       return [];
     }
 
@@ -634,39 +658,47 @@ function extractRoomsFromExternalSpreadsheet(url) {
     const lastRow = extSheet.getLastRow();
     const lastCol = extSheet.getLastColumn();
 
-    Logger.log('extractRoomsFromExternalSpreadsheet: lastRow=' + lastRow + ', lastCol=' + lastCol);
+    Logger.log('Hoja externa: ' + lastRow + ' filas, ' + lastCol + ' columnas');
 
-    // Validar estructura mínima
     if (lastRow < 2 || lastCol < 5) {
-      Logger.log('extractRoomsFromExternalSpreadsheet: estructura insuficiente (lastRow<2 o lastCol<5)');
+      Logger.log('Estructura insuficiente');
       return [];
     }
 
-    // Leer datos desde fila 2 en adelante (skip header)
+    // 3) LEER DATOS Y FILTRAR
     const dataRange = extSheet.getRange(2, 1, lastRow - 1, Math.max(5, lastCol));
     const data = dataRange.getDisplayValues();
 
     const rooms = [];
     const seen = new Set();
+    let processedCount = 0;
+    let includedCount = 0;
 
-    // Procesar cada fila
     for (let r = 0; r < data.length; r++) {
       const row = data[r];
+      processedCount++;
 
-      // Columna B (índice 1): Número de habitación
+      // Columna B (índice 1): Habitación
       const roomNumber = (row[1] + '').trim();
+      
+      // Columna E (índice 4): Fecha de salida
+      const exitDateStr = (row[4] + '').trim();
 
-      // Columna E (índice 4): Check de salida (debe tener valor)
-      const exitInfo = (row[4] + '').trim();
+      if (!roomNumber || !exitDateStr) continue;
 
-      // Solo incluir si: tiene habitación + tiene check-out + no es duplicado
-      if (roomNumber && exitInfo && !seen.has(roomNumber)) {
+      // Parsear fecha de salida
+      const exitDate = parsePossibleDate(exitDateStr);
+      if (!exitDate) continue;
+
+      // Filtro: salida > próximo martes (es decir, miércoles en adelante)
+      if (exitDate > nextTuesday && !seen.has(roomNumber)) {
         rooms.push(roomNumber);
         seen.add(roomNumber);
+        includedCount++;
       }
     }
 
-    Logger.log('extractRoomsFromExternalSpreadsheet: total cargadas = ' + rooms.length);
+    Logger.log('extractRoomsFromExternalSpreadsheet: procesadas=' + processedCount + ', incluidas=' + includedCount + ', total=' + rooms.length);
     return rooms;
 
   } catch (err) {
@@ -693,7 +725,7 @@ function actualizar() {
     if (!url) { Logger.log('actualizar: no hay link en W178.'); return; }
 
     const unique = extractRoomsFromExternalSpreadsheet(url);
-    if (!unique || unique.length === 0) { Logger.log('actualizar: no se encontraron habitaciones después de la extracción.'); return; }
+    if (!unique || unique.length === 0) { Logger.log('actualizar: no quedaron habitaciones después del filtrado.'); return; }
 
     const roomsRawUnique = unique;
     const neededPairs = Math.max(BASE_PAIRS, Math.ceil(roomsRawUnique.length / ROWS_PER_COLUMN));
