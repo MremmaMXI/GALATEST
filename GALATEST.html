@@ -594,83 +594,81 @@ function updateSelectorRow(width) {
   }
 }
 
-/* ======================== NUEVA FUNCIÓN SIMPLIFICADA ======================== */
+/* ======================== NUEVA FUNCIÓN SIMPLIFICADA: SOLO REEMPLAZA extractRoomsFromExternalSpreadsheet ======================== */
 /**
  * extractRoomsFromExternalSpreadsheet(url)
- * VERSIÓN SIMPLIFICADA: Carga TODOS los números de habitación sin filtros restrictivos
+ * VERSIÓN SIMPLIFICADA: Carga TODOS los números de habitación SIN filtros restrictivos
  * 
- * Estructura esperada de la hoja filtrada desde la APP:
- * Fila 1 (encabezados):
- *   A: Hotel
- *   B: Habitación
- *   C: Apellido
- *   D: Nombre
- *   E: Salida (o fecha check-out)
- *   F: (vacío)
- *   G: (vacío)
- *   H: (vacío)
- * 
- * Datos: Comienzan en fila 2
+ * Estructura esperada:
+ * Fila 1 (encabezados): A=Hotel, B=Habitación, C=Apellido, D=Nombre, E=Salida
+ * Datos: Fila 2 en adelante
  * - Columna B: Número de habitación
- * - Columna E: Debe tener valor (check que la persona tiene salida registrada)
+ * - Columna E: Debe tener valor (check de salida registrada)
  */
 function extractRoomsFromExternalSpreadsheet(url) {
   try {
-    Logger.log('extractRoomsFromExternalSpreadsheet: iniciando con URL: ' + url);
+    Logger.log('extractRoomsFromExternalSpreadsheet: iniciando con URL');
     
-    // Abrir el spreadsheet externo (con permiso de lectura)
-    const extSs = SpreadsheetApp.openByUrl(url);
-    const sheets = extSs.getSheets();
-    
-    if (!sheets || sheets.length === 0) {
-      Logger.log('extractRoomsFromExternalSpreadsheet: no hay hojas en el documento externo');
+    if (!url || (''+url).trim() === '') {
+      Logger.log('extractRoomsFromExternalSpreadsheet: URL vacía');
       return [];
     }
-    
-    // Usar la primera hoja disponible
+
+    // Abrir spreadsheet externo
+    let externalSs;
+    try {
+      externalSs = SpreadsheetApp.openByUrl(url);
+    } catch (e) {
+      Logger.log('extractRoomsFromExternalSpreadsheet: no se pudo abrir la URL: ' + e);
+      return [];
+    }
+
+    // Obtener la primera hoja disponible
+    const sheets = externalSs.getSheets();
+    if (!sheets || sheets.length === 0) {
+      Logger.log('extractRoomsFromExternalSpreadsheet: no hay hojas en el spreadsheet');
+      return [];
+    }
+
     const extSheet = sheets[0];
     const lastRow = extSheet.getLastRow();
     const lastCol = extSheet.getLastColumn();
-    
-    Logger.log('extractRoomsFromExternalSpreadsheet: última fila=' + lastRow + ', última columna=' + lastCol);
-    
+
+    Logger.log('extractRoomsFromExternalSpreadsheet: lastRow=' + lastRow + ', lastCol=' + lastCol);
+
+    // Validar estructura mínima
     if (lastRow < 2 || lastCol < 5) {
-      // Menos de 2 filas (incluyendo header) o menos de 5 columnas
-      Logger.log('extractRoomsFromExternalSpreadsheet: estructura insuficiente');
+      Logger.log('extractRoomsFromExternalSpreadsheet: estructura insuficiente (lastRow<2 o lastCol<5)');
       return [];
     }
-    
-    // Leer toda la data: Fila 2 en adelante (saltamos header)
+
+    // Leer datos desde fila 2 en adelante (skip header)
     const dataRange = extSheet.getRange(2, 1, lastRow - 1, Math.max(5, lastCol));
     const data = dataRange.getDisplayValues();
-    
+
     const rooms = [];
     const seen = new Set();
-    
+
     // Procesar cada fila
     for (let r = 0; r < data.length; r++) {
       const row = data[r];
-      
+
       // Columna B (índice 1): Número de habitación
       const roomNumber = (row[1] + '').trim();
-      
-      // Columna E (índice 4): Debe tener un valor (check de salida)
+
+      // Columna E (índice 4): Check de salida (debe tener valor)
       const exitInfo = (row[4] + '').trim();
-      
-      // Solo incluir si:
-      // 1. Tiene número de habitación
-      // 2. Tiene check de salida/entrada registrado (celda E no está vacía)
-      // 3. No es duplicado
+
+      // Solo incluir si: tiene habitación + tiene check-out + no es duplicado
       if (roomNumber && exitInfo && !seen.has(roomNumber)) {
         rooms.push(roomNumber);
         seen.add(roomNumber);
-        Logger.log('extractRoomsFromExternalSpreadsheet: añadida habitación ' + roomNumber);
       }
     }
-    
-    Logger.log('extractRoomsFromExternalSpreadsheet: total habitaciones cargadas = ' + rooms.length);
+
+    Logger.log('extractRoomsFromExternalSpreadsheet: total cargadas = ' + rooms.length);
     return rooms;
-    
+
   } catch (err) {
     Logger.log('extractRoomsFromExternalSpreadsheet error: ' + err);
     return [];
@@ -694,12 +692,10 @@ function actualizar() {
     const url = (urlCell.getValue() + '').trim();
     if (!url) { Logger.log('actualizar: no hay link en W178.'); return; }
 
-    // NUEVA LÓGICA: extracción simplificada - carga TODOS sin filtrados restrictivos
     const unique = extractRoomsFromExternalSpreadsheet(url);
-    if (!unique || unique.length === 0) { Logger.log('actualizar: no se encontraron habitaciones. Verifica el URL y la estructura de la hoja.'); return; }
+    if (!unique || unique.length === 0) { Logger.log('actualizar: no se encontraron habitaciones después de la extracción.'); return; }
 
-    // Mantener el resto del flujo exactamente como antes, usando `unique` como lista de habitaciones
-    const roomsRawUnique = unique; // nombre local para conservar claridad
+    const roomsRawUnique = unique;
     const neededPairs = Math.max(BASE_PAIRS, Math.ceil(roomsRawUnique.length / ROWS_PER_COLUMN));
     const neededWidth = neededPairs * 2;
 
@@ -718,7 +714,7 @@ function actualizar() {
           const src = main.getRange(TABLE_START_ROW, lastPairStart, TABLE_ROWS, 2);
           const dest = main.getRange(TABLE_START_ROW, insertAfter + 1 + i, TABLE_ROWS, 2);
           src.copyTo(dest, { formatOnly: true });
-        } catch(e) { Logger.log('actualizar: error copiando formato al insertar pares: ' + e); }
+        } catch(e) { Logger.log('actualizar: error copiando formato: ' + e); }
       }
       currentWidth += extraEven;
     }
@@ -731,7 +727,6 @@ function actualizar() {
 
     enforcePairStructure(main, tableStartCol, effWidth);
 
-    // Titles
     for (let i = 0; i < effWidth / 2; i++) {
       const habCol = tableStartCol + i * 2;
       const chipCol = habCol + 1;
@@ -743,7 +738,6 @@ function actualizar() {
       } catch(e){}
     }
 
-    // Fill HABs
     for (let p = 0; p < neededPairs; p++) {
       const habCol = tableStartCol + p * 2;
       const startIndex = p * ROWS_PER_COLUMN;
@@ -770,7 +764,6 @@ function actualizar() {
     updateSelectorRow(effWidth);
     updateMostrandoRow(null);
 
-    // --- LIMPIAR W178 y poner "PEGAR LINK" con formato solicitado ---
     try {
       const w = main.getRange('W178');
       w.clearContent();
@@ -783,75 +776,10 @@ function actualizar() {
       Logger.log('actualizar: no se pudo formatear W178: ' + e);
     }
 
-    // Intentar eliminar columnas vacías extra y actualizar versión
     removeExtraEmptyColumns();
     try { updateVersionLabel(); } catch (e) { Logger.log('after actualizar updateVersionLabel failed: ' + e); }
 
   } finally {
     try { LockService.getScriptLock().releaseLock(); } catch(e){ Logger.log('releaseLock failed: ' + e); }
   }
-}
-
-/* ====================== FUNCIONES DE REFERENCIA (stub) ====================== */
-// Estas funciones son referenciadas pero no se muestran en el archivo completo.
-// Asegúrate de que existan en tu archivo completo o serán necesarias para funcionar correctamente.
-
-function archivar() {
-  Logger.log('archivar: función stub - reemplazar con implementación completa');
-}
-
-function onEdit(e) {
-  Logger.log('onEdit: función stub - reemplazar con implementación completa');
-}
-
-function processSelectorByOrig(orig) {
-  Logger.log('processSelectorByOrig: función stub');
-}
-
-function cargarTablaDesdeRegistro(fechaStr) {
-  Logger.log('cargarTablaDesdeRegistro: función stub');
-}
-
-function clearTableAndReset(opts) {
-  Logger.log('clearTableAndReset: función stub');
-}
-
-function getRegistroFechaList() {
-  return [];
-}
-
-function enforcePairStructure(main, col, width) {
-  Logger.log('enforcePairStructure: función stub');
-}
-
-function applyChipStyleToConcierge(main, col, width) {
-  Logger.log('applyChipStyleToConcierge: función stub');
-}
-
-function applyRowColorsAndBorder(main, col, width) {
-  Logger.log('applyRowColorsAndBorder: función stub');
-}
-
-function updateFechaDropdown() {
-  Logger.log('updateFechaDropdown: función stub');
-}
-
-function removeExtraEmptyColumns() {
-  Logger.log('removeExtraEmptyColumns: función stub');
-}
-
-function ensureConciergeValidationOnBase() {
-  Logger.log('ensureConciergeValidationOnBase: función stub');
-}
-
-function addManualGalaMenu() {
-  Logger.log('addManualGalaMenu: función stub');
-}
-
-function applyConciergeConditionalFormattingToRegistro(reg, col, width, dataRow) {
-  Logger.log('applyConciergeConditionalFormattingToRegistro: función stub');
-}
-
-function applyStaticConciergeFormattingToRegistro(reg, col, width, dataRow) {
-  Logger.log('applyStaticConciergeFormattingToRegistro: función stub');
 }
